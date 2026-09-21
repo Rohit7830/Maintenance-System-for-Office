@@ -1,0 +1,318 @@
+// ═══════════════════════════════════════════════
+//  CONFIGURATION
+// ═══════════════════════════════════════════════
+var CONFIG = {
+  ADMIN_PASS: "admin@123",
+  HR_EMAIL:   "rohitfzd61@gmail.com.com",
+  SHEET_NAME: "Tickets"
+};
+
+// ═══════════════════════════════════════════════
+//  doGet
+// ═══════════════════════════════════════════════
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile("index")
+    .setTitle("Maintenance Portal")
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// ═══════════════════════════════════════════════
+//  SHEET HELPER
+// ═══════════════════════════════════════════════
+function getSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.SHEET_NAME);
+  }
+  if (sheet.getLastRow() === 0) {
+    var header = sheet.getRange(1, 1, 1, 13);
+    header.setValues([[
+      "Ticket ID", "Date", "Name", "Department", "Contact", "Email",
+      "Location", "Category", "Sub Category", "Priority",
+      "Description", "Status", "Updated On"
+    ]]);
+    header.setFontWeight("bold");
+    header.setBackground("#2563eb");
+    header.setFontColor("#ffffff");
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidth(11, 250);
+  }
+  return sheet;
+}
+
+// ═══════════════════════════════════════════════
+//  TICKET ID GENERATOR
+// ═══════════════════════════════════════════════
+function getNextTicketId() {
+  var sheet = getSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return "MNT-0001";
+  var vals = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var nums = [];
+  for (var i = 0; i < vals.length; i++) {
+    var v = String(vals[i][0]);
+    if (v.indexOf("MNT-") === 0) {
+      var n = parseInt(v.replace("MNT-", ""), 10);
+      if (!isNaN(n)) nums.push(n);
+    }
+  }
+  var max = nums.length > 0 ? Math.max.apply(null, nums) : 0;
+  var next = String(max + 1);
+  while (next.length < 4) next = "0" + next;
+  return "MNT-" + next;
+}
+
+// ═══════════════════════════════════════════════
+//  SAVE TICKET
+// ═══════════════════════════════════════════════
+function saveTicket(data) {
+  try {
+    var sheet    = getSheet();
+    var ticketId = getNextTicketId();
+    var dateStr  = Utilities.formatDate(
+      new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm"
+    );
+    sheet.appendRow([
+      ticketId,
+      dateStr,
+      data.name        || "",
+      data.empId       || "",
+      data.contact     || "",
+      data.email       || "",
+      data.location    || "",
+      data.category    || "",
+      data.subcategory || "",
+      data.priority    || "",
+      data.description || "",
+      "OPEN",
+      dateStr
+    ]);
+    sendHRMail(ticketId, data, dateStr);
+    if (data.email && data.email.trim() !== "") {
+      sendEmployeeMail(ticketId, data, dateStr);
+    }
+    return { success: true, ticketId: ticketId };
+  } catch (err) {
+    return { success: false, error: err.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  EMAIL TO HR
+// ═══════════════════════════════════════════════
+function sendHRMail(ticketId, data, dateStr) {
+  try {
+    var emojiMap = { "HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢" };
+    var emoji = emojiMap[data.priority] || "⚪";
+    var subject = emoji + " New Maintenance Request: " + ticketId + " [" + data.priority + "]";
+    var body = "New maintenance request submitted.\n\n"
+      + "TICKET DETAILS\n"
+      + "Ticket ID   : " + ticketId + "\n"
+      + "Date        : " + dateStr + "\n"
+      + "Status      : OPEN\n\n"
+      + "EMPLOYEE DETAILS\n"
+      + "Name        : " + (data.name     || "") + "\n"
+      + "Department  : " + (data.empId    || "-") + "\n"
+      + "Contact     : " + (data.contact  || "-") + "\n"
+      + "Email       : " + (data.email    || "-") + "\n"
+      + "Location    : " + (data.location || "") + "\n\n"
+      + "ISSUE DETAILS\n"
+      + "Category    : " + (data.category    || "") + "\n"
+      + "Sub-Cat     : " + (data.subcategory || "-") + "\n"
+      + "Priority    : " + emoji + " " + (data.priority || "") + "\n\n"
+      + "Description :\n" + (data.description || "") + "\n\n"
+      + "Please login to Admin Dashboard to update the status.";
+    MailApp.sendEmail({ to: CONFIG.HR_EMAIL, subject: subject, body: body });
+  } catch(e) {
+    Logger.log("HR mail error: " + e.toString());
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  EMAIL TO EMPLOYEE — on submission
+// ═══════════════════════════════════════════════
+function sendEmployeeMail(ticketId, data, dateStr) {
+  try {
+    var emojiMap = { "HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢" };
+    var emoji = emojiMap[data.priority] || "⚪";
+    var subject = "Maintenance Request Received — " + ticketId;
+    var body = "Dear " + (data.name || "Employee") + ",\n\n"
+      + "Aapki maintenance request safaltaapoorvak submit kar di gayi hai.\n"
+      + "Hamari team is matter ko jald hi review karke zaroori action legi.\n\n"
+      + "YOUR TICKET DETAILS\n"
+      + "Ticket ID   : " + ticketId + "\n"
+      + "Date        : " + dateStr + "\n"
+      + "Location    : " + (data.location    || "") + "\n"
+      + "Category    : " + (data.category    || "") + "\n"
+      + "Sub-Cat     : " + (data.subcategory || "-") + "\n"
+      + "Priority    : " + emoji + " " + (data.priority || "") + "\n\n"
+      + "Description :\n" + (data.description || "") + "\n\n"
+      + "Please save your Ticket ID for follow-up: " + ticketId + "\n\n"
+      + "Regards,\nMaintenance Team\nTransparent Overseas";
+    MailApp.sendEmail({ to: data.email, subject: subject, body: body });
+  } catch(e) {
+    Logger.log("Employee mail error: " + e.toString());
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  EMAIL TO EMPLOYEE — on closure
+// ═══════════════════════════════════════════════
+function sendClosureMail(ticketId, data) {
+  try {
+    var closedOn = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
+    var subject = "Maintenance Request Closed — " + ticketId;
+    var body = "Dear " + (data.name || "Employee") + ",\n\n"
+      + "Aapki maintenance request ko safaltaapoorvak resolve kar diya gaya hai aur ab is request ko close kar diya gaya hai.\n"
+      + "Thank you for your patience.\n\n"
+      + "TICKET DETAILS\n"
+      + "Ticket ID   : " + ticketId + "\n"
+      + "Closed On   : " + closedOn + "\n"
+      + "Location    : " + (data.location    || "") + "\n"
+      + "Category    : " + (data.category    || "") + "\n"
+      + "Sub-Cat     : " + (data.subcategory || "-") + "\n"
+      + "Priority    : " + (data.priority    || "") + "\n\n"
+      + "Description :\n" + (data.description || "") + "\n\n"
+      + "Status      : CLOSED\n\n"
+      + "If the issue persists, please raise a new request.\n\n"
+      + "Regards,\nMaintenance Team\nTransparent Overseas";
+    MailApp.sendEmail({ to: data.email, subject: subject, body: body });
+  } catch(e) {
+    Logger.log("Closure mail error: " + e.toString());
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  ADMIN LOGIN
+// ═══════════════════════════════════════════════
+function adminLogin(password) {
+  if (password === CONFIG.ADMIN_PASS) {
+    return { success: true };
+  }
+  return { success: false };
+}
+
+// ═══════════════════════════════════════════════
+//  GET ALL TICKETS
+// ═══════════════════════════════════════════════
+function getTickets() {
+  try {
+    var sheet = getSheet();
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return [];
+    var rows = sheet.getRange(2, 1, lastRow - 1, 13).getValues();
+    var result = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r[0] !== "" && r[0] !== null && r[0] !== undefined) {
+        result.push({
+          ticketId:    String(r[0]  || ""),
+          date:        String(r[1]  || ""),
+          name:        String(r[2]  || ""),
+          empId:       String(r[3]  || ""),
+          contact:     String(r[4]  || ""),
+          email:       String(r[5]  || ""),
+          location:    String(r[6]  || ""),
+          category:    String(r[7]  || ""),
+          subcategory: String(r[8]  || ""),
+          priority:    String(r[9]  || ""),
+          description: String(r[10] || ""),
+          status:      String(r[11] || "OPEN"),
+          updatedOn:   String(r[12] || "")
+        });
+      }
+    }
+    return result;
+  } catch(e) {
+    Logger.log("getTickets error: " + e.toString());
+    return [];
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  UPDATE STATUS
+// ═══════════════════════════════════════════════
+function updateStatus(ticketId, status) {
+  try {
+    var sheet = getSheet();
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return { success: false, error: "No tickets" };
+    var rows = sheet.getRange(2, 1, lastRow - 1, 13).getValues();
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]) === String(ticketId)) {
+        var rowNum = i + 2;
+        sheet.getRange(rowNum, 12).setValue(status);
+        sheet.getRange(rowNum, 13).setValue(
+          Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm")
+        );
+        if (status === "CLOSED") {
+          var empEmail = String(rows[i][5] || "").trim();
+          if (empEmail !== "") {
+            sendClosureMail(ticketId, {
+              name:        String(rows[i][2]  || ""),
+              email:       empEmail,
+              location:    String(rows[i][6]  || ""),
+              category:    String(rows[i][7]  || ""),
+              subcategory: String(rows[i][8]  || ""),
+              priority:    String(rows[i][9]  || ""),
+              description: String(rows[i][10] || "")
+            });
+          }
+        }
+        return { success: true };
+      }
+    }
+    return { success: false, error: "Ticket not found" };
+  } catch(e) {
+    return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  DASHBOARD STATS
+// ═══════════════════════════════════════════════
+function getDashboardStats() {
+  try {
+    var sheet = getSheet();
+    var lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return { total: 0, open: 0, progress: 0, closed: 0 };
+    var rows = sheet.getRange(2, 1, lastRow - 1, 13).getValues();
+    var total = 0, open = 0, progress = 0, closed = 0;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i][0] !== "" && rows[i][0] !== null) {
+        total++;
+        var s = String(rows[i][11]).toUpperCase().trim();
+        if      (s === "OPEN")        open++;
+        else if (s === "IN PROGRESS") progress++;
+        else if (s === "CLOSED" || s === "COMPLETED") closed++;
+      }
+    }
+    return { total: total, open: open, progress: progress, closed: closed };
+  } catch(e) {
+    return { total: 0, open: 0, progress: 0, closed: 0 };
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  TEST FUNCTIONS
+// ═══════════════════════════════════════════════
+function testSave() {
+  var r = saveTicket({
+    name: "Test User", empId: "Sales", contact: "9999999999",
+    email: "test@example.com", location: "Room 101",
+    category: "IT", subcategory: "Printer Issue",
+    priority: "HIGH", description: "Test ticket - please ignore"
+  });
+  Logger.log(JSON.stringify(r));
+}
+
+function testGetTickets() {
+  var r = getTickets();
+  Logger.log("Total: " + r.length);
+  Logger.log(JSON.stringify(r));
+}
+
+function testStats() {
+  Logger.log(JSON.stringify(getDashboardStats()));
+}
